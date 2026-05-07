@@ -11,146 +11,9 @@ const TABS = [
   { id: "backend",      label: "🖥️", title: "Backend Kód"    },
 ];
 
-const ESP32_CODE = `// ============================================================
-// SMART GREENHOUSE — ESP32 Firmware v1.0
-// Senzory  : DHT22 (teplota+vlhkosť), Soil Moisture, LDR
-// Aktuátory: Ventilátor (Relay), Čerpadlo (Relay), Okno (Servo)
-// Protokol : HTTP REST  →  Node.js backend
-// Knižnice : DHT sensor library, ArduinoJson, ESP32Servo
-// ============================================================
 
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <DHT.h>
-#include <ESP32Servo.h>
 
-//── KONFIGURÁCIA ────────────────────────────────────────────
-const char* WIFI_SSID  = "TP-Link ez 2G";
-const char* WIFI_PASS  = "ez72ural12";
-const char* SERVER_URL = "http://192.168.1.100:3001";
-
-// ── PINY ─────────────────────────────────────────────────────
-#define DHT_PIN        4    // DHT22 data
-#define SOIL_PIN      34    // Analógový — vlhkosť pôdy
-#define LDR_PIN       35    // Analógový — intenzita svetla
-#define FAN_PIN       26    // Relay — ventilátor (active LOW)
-#define PUMP_PIN      27    // Relay — čerpadlo  (active LOW)
-#define SERVO_PIN     13    // Servo — okno
-
-// ── OBJEKTY ──────────────────────────────────────────────────
-DHT   dht(DHT_PIN, DHT22);
-Servo windowServo;
-
-unsigned long lastSend   = 0;
-const int     INTERVAL   = 5000;   // ms medzi odoslaním
-
-// ── SETUP ────────────────────────────────────────────────────
-void setup() {
-  Serial.begin(115200);
-
-  // Relé — predvolene vypnuté (HIGH = neaktívne)
-  pinMode(FAN_PIN,  OUTPUT); digitalWrite(FAN_PIN,  HIGH);
-  pinMode(PUMP_PIN, OUTPUT); digitalWrite(PUMP_PIN, HIGH);
-
-  // Servo — zatvorené okno
-  windowServo.attach(SERVO_PIN);
-  windowServo.write(0);
-
-  dht.begin();
-  connectWiFi();
-
-  Serial.println("✅ Smart Greenhouse pripravený!");
-}
-
-// ── HLAVNÁ SLUČKA ─────────────────────────────────────────────
-void loop() {
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
-
-  if (millis() - lastSend >= INTERVAL) {
-    lastSend = millis();
-
-    // 1. Čítaj senzory
-    float temp = dht.readTemperature();
-    float hum  = dht.readHumidity();
-    int   soil = map(analogRead(SOIL_PIN), 4095, 0, 0, 100);
-    int   ldr  = analogRead(LDR_PIN);  // 0–4095
-
-    if (isnan(temp) || isnan(hum)) {
-      Serial.println("❌ DHT22 chyba čítania");
-      return;
-    }
-
-    Serial.printf("[SENZORY] T=%.1f°C  H=%.1f%%  S=%d%%  L=%d\\n",
-                  temp, hum, soil, ldr);
-
-    // 2. Odošli dáta na backend
-    sendSensors(temp, hum, soil, ldr);
-
-    // 3. Stiahni príkazy pre aktuátory
-    applyActuators();
-  }
-}
-
-// ── WIFI ──────────────────────────────────────────────────────
-void connectWiFi() {
-  Serial.printf("Pripájam na %s...", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries++ < 20) {
-    delay(500); Serial.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED)
-    Serial.println("\\n✅ IP: " + WiFi.localIP().toString());
-  else
-    Serial.println("\\n❌ WiFi zlyhalo!");
-}
-
-// ── ODOSLANIE SENZOROVÝCH DÁT ─────────────────────────────────
-void sendSensors(float t, float h, int soil, int ldr) {
-  HTTPClient http;
-  StaticJsonDocument<200> doc;
-  doc["temperature"]  = t;
-  doc["humidity"]     = h;
-  doc["soilMoisture"] = soil;
-  doc["light"]        = ldr;
-
-  String body;
-  serializeJson(doc, body);
-
-  http.begin(String(SERVER_URL) + "/api/sensors");
-  http.addHeader("Content-Type", "application/json");
-  int code = http.POST(body);
-  http.end();
-  Serial.printf("[HTTP] POST /sensors → %d\\n", code);
-}
-
-// ── PRIJATIE PRÍKAZOV A APLIKOVANIE ──────────────────────────
-void applyActuators() {
-  HTTPClient http;
-  http.begin(String(SERVER_URL) + "/api/actuators");
-  int code = http.GET();
-
-  if (code == 200) {
-    StaticJsonDocument<200> doc;
-    deserializeJson(doc, http.getString());
-
-    bool fan    = doc["fan"]    | false;
-    bool pump   = doc["pump"]   | false;
-    int  window = doc["window"] | 0;     // uhol 0–90°
-
-    // Relé sú active-LOW
-    digitalWrite(FAN_PIN,  fan  ? LOW : HIGH);
-    digitalWrite(PUMP_PIN, pump ? LOW : HIGH);
-    windowServo.write(constrain(window, 0, 90));
-
-    Serial.printf("[AKTUÁTORY] Vent=%d  Pump=%d  Okno=%d°\\n",
-                  fan, pump, window);
-  }
-  http.end();
-}`;
-
-const BACKEND_CODE = `// ============================================================
+//const BACKEND_CODE = // ============================================================
 //  SMART GREENHOUSE — Node.js Backend v1.0
 //  npm install express ws cors
 //  node server.js
@@ -286,7 +149,7 @@ wss.on("connection", ws => {
 server.listen(PORT, () => {
   console.log(\`🚀 Backend beží na http://localhost:\${PORT}\`);
   console.log(\`   WebSocket: ws://localhost:\${PORT}\`);
-});`;
+  });`);
 
 // ── STYLES ────────────────────────────────────────────────────
 const S = {
@@ -983,4 +846,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+});
