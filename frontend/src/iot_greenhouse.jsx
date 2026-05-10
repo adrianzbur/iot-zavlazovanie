@@ -7,8 +7,6 @@ const TABS = [
   { id: "automation",   label: "⚙️", title: "Automatizácia"  },
   { id: "history",      label: "📈", title: "História"       },
   { id: "architecture", label: "🏗️", title: "Architektúra"   },
-  { id: "esp32",        label: "💾", title: "ESP32 Kód"      },
-  { id: "backend",      label: "🖥️", title: "Backend Kód"    },
 ];
 
 // ── STYLES ────────────────────────────────────────────────────
