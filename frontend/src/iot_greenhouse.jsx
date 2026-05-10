@@ -1,7 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
-// ── CONSTANTS ────────────────────────────────────────────────────────────────
+// ── KONFIGURÁCIA ─────────────────────────────────────────────
+// Zmeň na IP tvojho PC ak frontend beží na inom zariadení
+const WS_URL = "ws://localhost:3001";
+
+// ── CONSTANTS ────────────────────────────────────────────────
 const TABS = [
   { id: "dashboard",    label: "📊", title: "Dashboard"      },
   { id: "automation",   label: "⚙️", title: "Automatizácia"  },
@@ -11,19 +15,13 @@ const TABS = [
 
 // ── STYLES ────────────────────────────────────────────────────
 const S = {
-  bg: "#07090f",
-  panel: "#0d1117",
-  border: "#1c2d40",
-  cyan: "#00e5ff",
-  green: "#00e676",
-  amber: "#ffab00",
-  red: "#ff1744",
-  blue: "#448aff",
-  textPrimary: "#e0f0ff",
-  textMuted: "#4a6a8a",
-  textDim: "#2a4a6a",
+  bg: "#07090f", panel: "#0d1117", border: "#1c2d40",
+  cyan: "#00e5ff", green: "#00e676", amber: "#ffab00",
+  red: "#ff1744", blue: "#448aff",
+  textPrimary: "#e0f0ff", textMuted: "#4a6a8a", textDim: "#2a4a6a",
 };
 
+// ── HELPER COMPONENTS ─────────────────────────────────────────
 const Panel = ({ children, style = {}, glow }) => (
   <div style={{
     background: S.panel,
@@ -31,9 +29,7 @@ const Panel = ({ children, style = {}, glow }) => (
     borderRadius: 12,
     boxShadow: glow ? `0 0 20px ${glow}18` : "none",
     ...style,
-  }}>
-    {children}
-  </div>
+  }}>{children}</div>
 );
 
 const Tag = ({ children, color = S.cyan }) => (
@@ -62,11 +58,7 @@ function SensorCard({ icon, label, value, unit, color, min, max, subtext, badge 
         <div>
           <div style={{ fontSize: 11, color: S.textMuted, letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>
             {label}
-            {badge && (
-              <span style={{ marginLeft: 6, fontSize: 9, background: color + "20", color, borderRadius: 3, padding: "1px 5px" }}>
-                {badge}
-              </span>
-            )}
+            {badge && <span style={{ marginLeft: 6, fontSize: 9, background: color + "20", color, borderRadius: 3, padding: "1px 5px" }}>{badge}</span>}
           </div>
           <div style={{ fontSize: 32, fontWeight: 800, color, fontFamily: "monospace", lineHeight: 1 }}>
             {typeof value === "number" ? (value % 1 === 0 ? value : value.toFixed(1)) : value}
@@ -116,8 +108,7 @@ function PumpCard({ active, autoMode, onToggle, autoReason }) {
           opacity: autoMode ? 0.7 : 1,
         }}>
           <div style={{
-            position: "absolute", top: 4,
-            left: active ? 30 : 4,
+            position: "absolute", top: 4, left: active ? 30 : 4,
             width: 24, height: 24, borderRadius: "50%",
             background: active ? "#fff" : S.textMuted,
             transition: "left 0.3s",
@@ -154,112 +145,121 @@ const SliderRow = ({ label, value, min, max, step = 1, unit, color, onChange }) 
   </div>
 );
 
-function CodeBlock({ code }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <div style={{ position: "relative" }}>
-      <button onClick={copy} style={{
-        position: "sticky", top: 8, float: "right", zIndex: 10,
-        background: copied ? "#1a3a1a" : "#1a2a3a",
-        border: `1px solid ${copied ? S.green : S.border}`,
-        borderRadius: 6, padding: "5px 14px",
-        color: copied ? S.green : S.textMuted,
-        fontSize: 11, cursor: "pointer", fontFamily: "monospace",
-        marginBottom: -32, marginRight: 8,
-      }}>
-        {copied ? "✓ Skopírované" : "⎘ Kopírovať"}
-      </button>
-      <div style={{
-        background: "#060a0d", border: `1px solid ${S.border}`, borderRadius: 10,
-        padding: "16px 14px", overflowX: "auto", maxHeight: "62vh", overflowY: "auto",
-        fontSize: 11.5, lineHeight: 1.75, whiteSpace: "pre", fontFamily: "monospace",
-      }}>
-        {code.split("\n").map((line, i) => {
-          let col = S.textPrimary;
-          if (line.trim().startsWith("//") || line.trim().startsWith("/*") || line.trim().startsWith("*") || line.trim().startsWith("--")) col = "#3a6080";
-          else if (line.includes("#include") || line.includes("#define") || line.includes("const ") || line.includes("require(")) col = "#c792ea";
-          else if (/\b(void|bool|int|float|char|String|let|const|var|function|if|else|return|while|for|new)\b/.test(line)) col = "#82aaff";
-          else if (line.includes("Serial.") || line.includes("digitalWrite") || line.includes("analogRead") || line.includes("console.")) col = "#89ddff";
-          else if (line.includes('"') || line.includes("'")) col = "#c3e88d";
-          return (
-            <div key={i} style={{ color: col, display: "flex" }}>
-              <span style={{ color: S.textDim, minWidth: 36, userSelect: "none", fontSize: 10, paddingRight: 12 }}>
-                {i + 1}
-              </span>
-              {line}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // ── MAIN APP ──────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("dashboard");
+  const [connected, setConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const wsRef = useRef(null);
 
   const [sensors, setSensors] = useState({
-    temperature: 22.5, humidity: 57, soilMoisture: 52, light: 620,
+    temperature: null, humidity: null, soilMoisture: null, light: null,
   });
-
   const [actuators, setActuators] = useState({ pump: false });
-
   const [automation, setAutomation] = useState({
     enabled: true,
     irrigation: { enabled: true, threshold: 35, duration: 10 },
   });
-
   const [history, setHistory] = useState([]);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
 
-  const runAuto = (s, a, auto) => {
-    if (!auto.enabled || !auto.irrigation.enabled) return a;
-    return { pump: s.soilMoisture < auto.irrigation.threshold };
-  };
-
+  // ── WebSocket pripojenie ──────────────────────────────────
   useEffect(() => {
-    const iv = setInterval(() => {
-      setSensors(prev => {
-        const s = {
-          temperature:  +Math.max(15, Math.min(38, prev.temperature  + (Math.random()-0.48)*0.6)).toFixed(1),
-          humidity:     +Math.max(30, Math.min(95, prev.humidity     + (Math.random()-0.5)*1.5)).toFixed(1),
-          soilMoisture: +Math.max(0,  Math.min(100,prev.soilMoisture + (Math.random()-0.54)*1.8)).toFixed(1),
-          light:        Math.round(Math.max(0, Math.min(1023, prev.light + (Math.random()-0.5)*60))),
-        };
-        setActuators(a => runAuto(s, a, automation));
-        setHistory(h => {
-          const t = new Date();
-          const label = `${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}`;
-          return [...h.slice(-29), { time: label, ...s, lightPct: Math.round(s.light / 10.23) }];
-        });
-        setLastUpdate(new Date());
-        return s;
-      });
-    }, 2500);
-    return () => clearInterval(iv);
-  }, [automation]);
+    let reconnectTimer = null;
 
+    function connect() {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setConnected(true);
+        console.log("WebSocket pripojený");
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+
+          if (msg.type === "fullState") {
+            setSensors(msg.data.sensors);
+            setActuators(msg.data.actuators);
+            setAutomation(msg.data.automation);
+            setLastUpdate(new Date());
+          }
+
+          if (msg.type === "sensors") {
+            setSensors(msg.data);
+            setLastUpdate(new Date());
+            // Pridaj do histórie
+            setHistory(h => {
+              const t = new Date();
+              const label = `${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}`;
+              const lightPct = Math.round((msg.data.light ?? 0) / 10.23);
+              return [...h.slice(-49), { time: label, ...msg.data, lightPct }];
+            });
+          }
+
+          if (msg.type === "actuators") {
+            setActuators(msg.data);
+          }
+
+          if (msg.type === "automation") {
+            setAutomation(msg.data);
+          }
+        } catch (err) {
+          console.error("WS parse error:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        setConnected(false);
+        console.log("WebSocket odpojený — skúšam znova o 3s...");
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, []);
+
+  // ── Manuálne ovládanie pumpy ──────────────────────────────
   const manualToggle = () => {
     if (automation.enabled) return;
-    setActuators(a => ({ pump: !a.pump }));
+    const newState = { pump: !actuators.pump };
+    setActuators(newState);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "setActuator", data: newState }));
+    }
   };
 
+  // ── Zmena automation nastavení ────────────────────────────
   const updateAuto = (key, val) => {
-    setAutomation(prev => {
-      const next = { ...prev, irrigation: { ...prev.irrigation, [key]: val } };
-      setSensors(s => { setActuators(a => runAuto(s, a, next)); return s; });
-      return next;
-    });
+    const next = { ...automation, irrigation: { ...automation.irrigation, [key]: val } };
+    setAutomation(next);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "setAutomation", data: next }));
+    }
   };
 
-  const soilAlert = sensors.soilMoisture < automation.irrigation.threshold;
-  const lightPct  = Math.round(sensors.light / 10.23);
+  const toggleAutoMode = () => {
+    const next = { ...automation, enabled: !automation.enabled };
+    setAutomation(next);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "setAutomation", data: next }));
+    }
+  };
+
+  // ── Computed ─────────────────────────────────────────────
+  const soilAlert = sensors.soilMoisture !== null && sensors.soilMoisture < automation.irrigation.threshold;
+  const lightPct  = sensors.light !== null ? Math.round(sensors.light / 10.23) : null;
+  const hasData   = sensors.temperature !== null;
 
   return (
     <div style={{ fontFamily: "'Trebuchet MS', sans-serif", background: S.bg, minHeight: "100vh", color: S.textPrimary }}>
@@ -281,19 +281,21 @@ export default function App() {
             <div style={{ fontSize: 26, animation: "float 3s ease-in-out infinite" }}>🌱</div>
             <div>
               <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: 1, color: S.cyan }}>SMART WATERING</div>
-              <div style={{ fontSize: 10, color: S.textMuted, letterSpacing: 2, marginTop: 1 }}>
-                IoT CONTROL SYSTEM · ESP32
-              </div>
+              <div style={{ fontSize: 10, color: S.textMuted, letterSpacing: 2, marginTop: 1 }}>IoT CONTROL SYSTEM · ESP32</div>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <PulseCircle color={S.green} />
-              <span style={{ fontSize: 11, color: S.green, fontFamily: "monospace" }}>DEMO LIVE</span>
+              <PulseCircle color={connected ? S.green : S.red} />
+              <span style={{ fontSize: 11, color: connected ? S.green : S.red, fontFamily: "monospace" }}>
+                {connected ? "LIVE" : "OFFLINE"}
+              </span>
             </div>
-            <div style={{ fontSize: 10, color: S.textMuted, fontFamily: "monospace" }}>
-              {lastUpdate.toLocaleTimeString("sk-SK")}
-            </div>
+            {lastUpdate && (
+              <div style={{ fontSize: 10, color: S.textMuted, fontFamily: "monospace" }}>
+                {lastUpdate.toLocaleTimeString("sk-SK")}
+              </div>
+            )}
             <Tag color={automation.enabled ? S.amber : S.blue}>
               {automation.enabled ? "AUTO ON" : "MANUAL"}
             </Tag>
@@ -310,14 +312,30 @@ export default function App() {
               color: tab === t.id ? S.cyan : S.textMuted,
               borderBottom: tab === t.id ? `2px solid ${S.cyan}` : "2px solid transparent",
               transition: "all 0.2s",
-            }}>
-              {t.label} {t.title}
-            </button>
+            }}>{t.label} {t.title}</button>
           ))}
         </div>
       </div>
 
       <div style={{ padding: "16px" }}>
+
+        {/* Banner keď nie je pripojenie */}
+        {!connected && (
+          <Panel style={{ padding: "12px 16px", marginBottom: 14 }} glow={S.red}>
+            <div style={{ fontSize: 12, color: S.red }}>
+              ⚠ <strong>Backend nedostupný</strong> — skontroluj či beží <code style={{ fontFamily: "monospace" }}>node server.js</code> na porte 3001
+            </div>
+          </Panel>
+        )}
+
+        {/* Banner keď čakáme na prvé dáta */}
+        {connected && !hasData && (
+          <Panel style={{ padding: "12px 16px", marginBottom: 14 }} glow={S.amber}>
+            <div style={{ fontSize: 12, color: S.amber }}>
+              ⏳ Čakám na dáta z ESP32...
+            </div>
+          </Panel>
+        )}
 
         {/* ══════ DASHBOARD ══════ */}
         {tab === "dashboard" && (
@@ -337,16 +355,20 @@ export default function App() {
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-              <SensorCard icon="🌡️" label="Teplota" value={sensors.temperature} unit="°C"
+              <SensorCard icon="🌡️" label="Teplota"
+                value={hasData ? sensors.temperature : "—"} unit="°C"
                 color={S.cyan} min={15} max={40} subtext="DHT11" badge="DHT11" />
-              <SensorCard icon="💧" label="Vlhkosť vzduchu" value={sensors.humidity} unit="%"
+              <SensorCard icon="💧" label="Vlhkosť vzduchu"
+                value={hasData ? sensors.humidity : "—"} unit="%"
                 color={S.blue} min={0} max={100} subtext="DHT11" />
-              <SensorCard icon="🌱" label="Vlhkosť pôdy" value={sensors.soilMoisture} unit="%"
+              <SensorCard icon="🌱" label="Vlhkosť pôdy"
+                value={hasData ? sensors.soilMoisture : "—"} unit="%"
                 color={soilAlert ? S.red : S.green} min={0} max={100}
                 subtext={`Min prah: ${automation.irrigation.threshold}% · AO pin`} badge="AO" />
-              <SensorCard icon="☀️" label="Svetlo" value={lightPct} unit="%"
+              <SensorCard icon="☀️" label="Svetlo"
+                value={hasData ? lightPct : "—"} unit="%"
                 color={sensors.light > 800 ? S.amber : "#ffd54f"} min={0} max={100}
-                subtext={`Raw ADC: ${sensors.light}`} />
+                subtext={hasData ? `Raw ADC: ${sensors.light}` : ""} />
             </div>
 
             <div style={{ fontSize: 10, color: S.textMuted, letterSpacing: 3, marginBottom: 10, textTransform: "uppercase" }}>
@@ -375,16 +397,12 @@ export default function App() {
             <Panel style={{ padding: "18px 20px", marginBottom: 14 }} glow={automation.enabled ? S.amber : null}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: S.textPrimary, marginBottom: 4 }}>
-                    Automatizačný Režim
-                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: S.textPrimary, marginBottom: 4 }}>Automatizačný Režim</div>
                   <div style={{ fontSize: 11, color: S.textMuted }}>
-                    {automation.enabled
-                      ? "Pumpa sa automaticky riadi podľa vlhkosti pôdy"
-                      : "Manuálne ovládanie — pumpu ovládaš sám z dashboardu"}
+                    {automation.enabled ? "Pumpa sa automaticky riadi podľa vlhkosti pôdy" : "Manuálne ovládanie — pumpu ovládaš sám z dashboardu"}
                   </div>
                 </div>
-                <button onClick={() => setAutomation(p => ({ ...p, enabled: !p.enabled }))} style={{
+                <button onClick={toggleAutoMode} style={{
                   width: 60, height: 32, borderRadius: 16,
                   background: automation.enabled ? S.amber : S.border,
                   border: "none", cursor: "pointer", position: "relative", transition: "background 0.3s",
@@ -404,9 +422,7 @@ export default function App() {
                   <span style={{ fontSize: 24 }}>💧</span>
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: S.green }}>Automatická Závlaha</div>
-                    <div style={{ fontSize: 11, color: S.textMuted }}>
-                      Pumpa zapne keď vlhkosť pôdy klesne pod prah
-                    </div>
+                    <div style={{ fontSize: 11, color: S.textMuted }}>Pumpa zapne keď vlhkosť pôdy klesne pod prah</div>
                   </div>
                 </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
@@ -417,36 +433,16 @@ export default function App() {
                 </label>
               </div>
 
-              <SliderRow
-                label="Minimálna vlhkosť pôdy — pumpa ZAP pod"
+              <SliderRow label="Minimálna vlhkosť pôdy — pumpa ZAP pod"
                 value={automation.irrigation.threshold} min={0} max={80} unit="%" color={S.green}
                 onChange={v => updateAuto("threshold", v)} />
-
-              <SliderRow
-                label="Maximálny čas behu pumpy (ochrana pred pretopením)"
+              <SliderRow label="Maximálny čas behu pumpy (ochrana pred pretopením)"
                 value={automation.irrigation.duration} min={3} max={60} unit="s" color={S.blue}
                 onChange={v => updateAuto("duration", v)} />
 
-              {/* Info o AO pine */}
-              <div style={{
-                marginTop: 8, padding: "12px 14px",
-                background: "#00e67610", border: "1px solid #00e67630", borderRadius: 8,
-              }}>
-                <div style={{ fontSize: 11, color: S.green, fontWeight: 700, marginBottom: 6 }}>
-                  ℹ️ Soil Moisture — AO pin (softwarový prah)
-                </div>
-                <div style={{ fontSize: 11, color: S.textMuted, lineHeight: 1.6 }}>
-                  Potenciometer na module je pokazený → používame{" "}
-                  <strong style={{ color: S.green }}>AO (analógový)</strong> pin namiesto DO.
-                  Prah vlhkosti sa nastavuje tu v dashboarde. V ESP32 kóde skalibruj
-                  hodnoty <code style={{ color: S.cyan, fontFamily: "monospace" }}>SOIL_DRY</code> a{" "}
-                  <code style={{ color: S.cyan, fontFamily: "monospace" }}>SOIL_WET</code> podľa tvojho senzora.
-                </div>
-              </div>
-
               <div style={{ marginTop: 12, padding: "10px 14px", background: S.bg, borderRadius: 8, fontSize: 11, color: S.textMuted }}>
                 <div>Vlhkosť pôdy: <span style={{ color: soilAlert ? S.red : S.green, fontWeight: 700 }}>
-                  {sensors.soilMoisture}%</span></div>
+                  {hasData ? `${sensors.soilMoisture}%` : "—"}</span></div>
                 <div style={{ marginTop: 4 }}>Pumpa: <span style={{ color: actuators.pump ? S.blue : S.textMuted, fontWeight: 700 }}>
                   {actuators.pump ? "ZAP 💧" : "VYP"}</span></div>
               </div>
@@ -458,18 +454,16 @@ export default function App() {
         {tab === "history" && (
           <div>
             <div style={{ fontSize: 10, color: S.textMuted, letterSpacing: 3, marginBottom: 14, textTransform: "uppercase" }}>
-              ◈ História — posledných {history.length} meraní (každé 2.5s)
+              ◈ História — posledných {history.length} meraní (každé 5s z ESP32)
             </div>
             {history.length < 3 ? (
               <Panel style={{ padding: 40, textAlign: "center" }}>
-                <div style={{ fontSize: 14, color: S.textMuted }}>⏳ Zbieranie dát...</div>
+                <div style={{ fontSize: 14, color: S.textMuted }}>⏳ Zbieranie dát z ESP32...</div>
               </Panel>
             ) : (
               <>
                 <Panel style={{ padding: "16px 8px", marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, color: S.textMuted, paddingLeft: 12, marginBottom: 10 }}>
-                    🌡️ Teplota &amp; 💧 Vlhkosť vzduchu
-                  </div>
+                  <div style={{ fontSize: 12, color: S.textMuted, paddingLeft: 12, marginBottom: 10 }}>🌡️ Teplota &amp; 💧 Vlhkosť vzduchu</div>
                   <ResponsiveContainer width="100%" height={180}>
                     <LineChart data={history} margin={{ top: 5, right: 16, left: -20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={S.border} />
@@ -483,9 +477,7 @@ export default function App() {
                   </ResponsiveContainer>
                 </Panel>
                 <Panel style={{ padding: "16px 8px" }}>
-                  <div style={{ fontSize: 12, color: S.textMuted, paddingLeft: 12, marginBottom: 10 }}>
-                    🌱 Vlhkosť pôdy &amp; ☀️ Svetlo (%)
-                  </div>
+                  <div style={{ fontSize: 12, color: S.textMuted, paddingLeft: 12, marginBottom: 10 }}>🌱 Vlhkosť pôdy &amp; ☀️ Svetlo (%)</div>
                   <ResponsiveContainer width="100%" height={180}>
                     <LineChart data={history} margin={{ top: 5, right: 16, left: -20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={S.border} />
@@ -511,7 +503,7 @@ export default function App() {
                 label: "FYZICKÝ MODEL", color: S.green,
                 items: [
                   { icon: "🌡️", name: "DHT11", detail: "Teplota + Vlhkosť vzduchu → GPIO 4" },
-                  { icon: "🌱", name: "Soil Moisture — AO pin", detail: "GPIO 34 (ADC) · potenciometer pokazený → AO namiesto DO · map() kalibrácia" },
+                  { icon: "🌱", name: "Soil Moisture — AO pin", detail: "GPIO 34 (ADC) · potenciometer pokazený → AO namiesto DO" },
                   { icon: "☀️", name: "Fotorezistor LDR", detail: "Intenzita svetla (analóg) → GPIO 35 (ADC)" },
                   { icon: "💧", name: "Relay + Vodná pumpa", detail: "Závlaha → GPIO 26 · active LOW · ochranný časovač" },
                 ],
@@ -520,9 +512,9 @@ export default function App() {
                 label: "ESP32 FIRMWARE", color: S.cyan,
                 items: [
                   { icon: "📶", name: "WiFi 802.11 b/g/n", detail: "Pripojenie na domácu sieť (len 2.4GHz)" },
-                  { icon: "📤", name: "POST /api/sensors", detail: "Teplota, Vlhkosť vzd., Vlhkosť pôdy%, LDR — každých 5s" },
-                  { icon: "📥", name: "GET /api/actuators", detail: "Stiahnutie príkazu: pump: true/false" },
-                  { icon: "🔢", name: "map() kalibrácia soilu", detail: "SOIL_DRY=3200, SOIL_WET=800 → 0–100%" },
+                  { icon: "📤", name: "POST /api/sensors", detail: "T, H, Soil%, LDR — každých 5s" },
+                  { icon: "📥", name: "GET /api/actuators", detail: "Stiahnutie príkazu: pump true/false" },
+                  { icon: "🔢", name: "map() kalibrácia", detail: "SOIL_DRY / SOIL_WET → 0–100%" },
                 ],
               },
               {
@@ -535,19 +527,17 @@ export default function App() {
                 ],
               },
               {
-                label: "FRONTEND — React", color: "#e040fb",
+                label: "FRONTEND — React + Vite", color: "#e040fb",
                 items: [
-                  { icon: "📊", name: "Dashboard", detail: "4 senzory + stav pumpy" },
-                  { icon: "⚙️", name: "Automatizácia", detail: "Nastavenie prahu vlhkosti + max. čas behu" },
-                  { icon: "📈", name: "Graf histórie", detail: "Recharts — posledné merania" },
-                  { icon: "🎛️", name: "Manuálne ovládanie", detail: "Toggle pumpy pri vypnutom AUTO" },
+                  { icon: "🔌", name: "WebSocket klient", detail: "ws://localhost:3001 · auto-reconnect" },
+                  { icon: "📊", name: "Dashboard", detail: "Živé hodnoty z ESP32" },
+                  { icon: "⚙️", name: "Automatizácia", detail: "Nastavenie prahu + čas behu" },
+                  { icon: "📈", name: "Graf histórie", detail: "Posledných 50 meraní" },
                 ],
               },
             ].map((section, si) => (
               <Panel key={si} style={{ padding: "16px", marginBottom: 12 }} glow={section.color}>
-                <div style={{ fontSize: 10, color: section.color, letterSpacing: 3, fontWeight: 700, marginBottom: 12 }}>
-                  ◈ {section.label}
-                </div>
+                <div style={{ fontSize: 10, color: section.color, letterSpacing: 3, fontWeight: 700, marginBottom: 12 }}>◈ {section.label}</div>
                 {section.items.map((item, ii) => (
                   <div key={ii} style={{
                     display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 10,
@@ -563,58 +553,8 @@ export default function App() {
                 ))}
               </Panel>
             ))}
-
-            <Panel style={{ padding: "16px 18px" }}>
-              <div style={{ fontSize: 10, color: S.textMuted, letterSpacing: 3, marginBottom: 12 }}>◈ TOK DÁT</div>
-              <div style={{ fontFamily: "monospace", fontSize: 12, color: S.textMuted, lineHeight: 2.4, textAlign: "center" }}>
-                <div style={{ color: S.green }}>DHT11 + Soil AO + LDR</div>
-                <div style={{ color: S.textDim }}>↓ analogRead() / dht.read() + map()</div>
-                <div style={{ color: S.cyan }}>ESP32 → HTTP POST /api/sensors (5s)</div>
-                <div style={{ color: S.textDim }}>↓</div>
-                <div style={{ color: S.amber }}>Node.js Automation Engine</div>
-                <div style={{ color: S.textDim }}>↓ WebSocket broadcast</div>
-                <div style={{ color: "#e040fb" }}>React Dashboard</div>
-                <div style={{ color: S.textDim }}>↑ ESP32 GET /api/actuators</div>
-                <div style={{ color: S.blue }}>Relay → Vodná pumpa 💧</div>
-              </div>
-            </Panel>
           </div>
         )}
-
-        {/* CODE TABS */}
-        {tab === "esp32" && (
-          <div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              {[
-                { label: "DHT sensor library", color: S.cyan },
-                { label: "ArduinoJson", color: S.green },
-                { label: "Arduino IDE 2.x", color: S.amber },
-                { label: "AO pin — no servo needed", color: S.textMuted },
-              ].map(t => <Tag key={t.label} color={t.color}>{t.label}</Tag>)}
-            </div>
-            <div style={{ marginBottom: 12, padding: "12px 14px", background: "#00e67610",
-              border: "1px solid #00e67630", borderRadius: 8, fontSize: 11, color: S.green }}>
-              ⚠️ <strong>Kalibrácia:</strong> Skalibruj <code style={{ fontFamily: "monospace" }}>SOIL_DRY</code> a{" "}
-              <code style={{ fontFamily: "monospace" }}>SOIL_WET</code> podľa tvojho senzora.
-              Otvor Serial Monitor (115200 baud) a odčítaj ADC hodnotu pre suchú a mokrú pôdu.
-            </div>
-            <CodeBlock code={ESP32_CODE} />
-          </div>
-        )}
-
-        {tab === "backend" && (
-          <div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              {[
-                { label: "npm install express ws cors", color: S.cyan },
-                { label: "node server.js", color: S.green },
-                { label: "Port 3001", color: S.amber },
-              ].map(t => <Tag key={t.label} color={t.color}>{t.label}</Tag>)}
-            </div>
-            <CodeBlock code={BACKEND_CODE} />
-          </div>
-        )}
-
       </div>
     </div>
   );
