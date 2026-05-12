@@ -1,6 +1,6 @@
 # 🌱 IoT Zavlažovanie — Smart Greenhouse
 
-Inteligentný skleník riadený cez ESP32 s automatickou závlahou, real-time dashboardom a vzdialenom ovládaním cez webový prehliadač.
+Inteligentný systém automatického zavlažovania riadený cez ESP32 s real-time dashboardom, automatickou závlahou a LCD displejom.
 
 ---
 
@@ -9,72 +9,68 @@ Inteligentný skleník riadený cez ESP32 s automatickou závlahou, real-time da
 - [Prehľad projektu](#prehľad-projektu)
 - [Architektúra systému](#architektúra-systému)
 - [Hardvér](#hardvér)
-- [Zapojenie — Schéma pinov](#zapojenie--schéma-pinov)
+- [Zapojenie](#zapojenie)
+- [Kalibrácia soil senzora](#kalibrácia-soil-senzora)
 - [Inštalácia](#inštalácia)
 - [Spustenie](#spustenie)
 - [Automatizačné pravidlá](#automatizačné-pravidlá)
 - [API Dokumentácia](#api-dokumentácia)
 - [Štruktúra projektu](#štruktúra-projektu)
+- [Riešenie problémov](#riešenie-problémov)
 
 ---
 
 ## 🌿 Prehľad projektu
 
-IoT Zavlažovanie je systém ktorý monitoruje podmienky v skleníku a automaticky ovláda vodnú pumpu na základe vlhkosti pôdy. Systém pozostáva z troch vrstiev:
+IoT Zavlažovanie je systém ktorý monitoruje podmienky prostredia a automaticky ovláda vodnú pumpu podľa vlhkosti pôdy. Systém pozostáva z troch vrstiev:
 
 | Vrstva | Technológia | Úloha |
 |--------|-------------|-------|
-| **Firmware** | ESP32 + Arduino | Čítanie senzorov, ovládanie pumpy |
+| **Firmware** | ESP32 + Arduino | Čítanie senzorov, LCD displej, ovládanie pumpy |
 | **Backend** | Node.js + Express | REST API, WebSocket, automatizácia |
-| **Frontend** | React + Recharts | Dashboard, grafy, manuálne ovládanie |
-
-### Senzory a aktuátory
-
-| Komponent | Typ | Poznámka |
-|-----------|-----|----------|
-| DHT11 | Teplota + Vlhkosť vzduchu | GPIO 4 |
-| Soil Moisture | Vlhkosť pôdy — **AO pin** | GPIO 34 · potenciometer pokazený → AO |
-| LDR Fotorezistor | Intenzita svetla | GPIO 35 |
-| Vodná pumpa + Relay | Závlaha | GPIO 26 · active LOW |
+| **Frontend** | React + Vite | Dashboard, grafy, manuálne ovládanie |
 
 ### Funkcie
 - 📡 **Real-time monitoring** — senzory sa odosielajú každých 5 sekúnd
 - 💧 **Automatická závlaha** — pumpa reaguje na vlhkosť pôdy
 - ⏱️ **Ochranný časovač** — pumpa sa automaticky vypne po nastavenom čase
-- 🎛️ **Manuálne ovládanie** — prepnutie z AUTO do MANUAL režimu
-- 📈 **Graf histórie** — zobrazenie posledných meraní
+- 🖥️ **LCD displej** — zobrazuje aktuálne hodnoty priamo na zariadení
+- 🎛️ **Manuálne ovládanie** — prepnutie z AUTO do MANUAL režimu cez dashboard
+- 📈 **Graf histórie** — zobrazenie posledných 50 meraní
 - ⚠️ **Upozornenia** — alert keď vlhkosť pôdy klesne pod prah
 - 🔌 **WebSocket** — okamžité aktualizácie bez obnovenia stránky
+- 🔄 **Auto-reconnect** — frontend sa automaticky reconnectuje pri výpadku
 
 ---
 
 ## 🏗️ Architektúra systému
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    FYZICKÝ SKLENÍK                   │
-│  DHT11   ──┐                                         │
-│  Soil AO ──┤── ESP32 ──── WiFi ──── Node.js Backend  │
-│  LDR     ──┘     │                      │            │
-│               Relay ──── Vodná pumpa    │            │
-└──────────────────────────────────────────────────────┘
-                                          │ WebSocket
-                                     React Frontend
-                                     (prehliadač)
+┌──────────────────────────────────────────────────────────┐
+│                    FYZICKÝ SKLENÍK                       │
+│  DHT11        ──┐                                        │
+│  Soil (2-pin) ──┤── ESP32 ──── WiFi ──── Node.js Backend │
+│  LDR          ──┘     │                      │           │
+│  LCD I2C    ←─────────┤                      │           │
+│               Relay ──── Vodná pumpa          │           │
+└───────────────────────────────────────────────┼──────────┘
+                                                │ WebSocket
+                                          React Dashboard
+                                          (prehliadač)
 ```
 
 ### Tok dát
 
 ```
-DHT11 + Soil AO + LDR
+DHT11 + Soil (2-pin AO) + LDR
     ↓  analogRead() + map() kalibrácia
-ESP32 → HTTP POST /api/sensors (každých 5s)
-    ↓
+ESP32 → zobrazí na LCD
+    ↓  HTTP POST /api/sensors (každých 5s)
 Node.js Automation Engine
     ↓  WebSocket broadcast
-React Dashboard
+React Dashboard (Live)
     ↑  ESP32 GET /api/actuators
-Relay → Vodná pumpa 💧
+Relay NC → Vodná pumpa 💧
 ```
 
 ---
@@ -83,34 +79,105 @@ Relay → Vodná pumpa 💧
 
 ### Zoznam komponentov
 
-| Komponent | Model | Funkcia |
-|-----------|-------|---------|
+| Komponent | Model/Typ | Funkcia |
+|-----------|-----------|---------|
 | Mikrokontrolér | ESP32 DevKit v1 | Hlavná jednotka |
 | Teplotný senzor | DHT11 | Teplota + vlhkosť vzduchu |
-| Senzor vlhkosti pôdy | Resistívny (modrá doska) | Vlhkosť substrátu — **AO pin** |
+| Senzor vlhkosti pôdy | Resistívny 2-pin | Vlhkosť substrátu — **priamo na ESP32 cez 10kΩ** |
 | Fotorezistor | LDR + 10kΩ | Intenzita svetla |
-| Relé modul | 1-kanálový 5V | Spínanie pumpy |
-| Vodná pumpa | Mini 3–5V | Závlaha |
-| Napájanie | 5V / 2A | USB alebo adaptér |
+| Relay modul | 1-kanálový 5V | Spínanie pumpy — **zapojený cez NC** |
+| Vodná pumpa | Mini 3–5V DC | Závlaha |
+| LCD displej | 16x2 + I2C modul | Zobrazenie hodnôt |
+| Batéria/zdroj | 4x AA alebo 5V adaptér | Napájanie pumpy (oddelené od ESP32!) |
 
-> ⚠️ **Poznámka k Soil Moisture senzoru:** Potenciometer na module je pokazený — preto **nepripájaj DO pin**. Používame **AO (analógový)** pin a prah nastavujeme softwarovo cez dashboard a premenné `SOIL_DRY` / `SOIL_WET` v kóde.
+> ⚠️ **Pumpa musí mať vlastný zdroj napájania** — ESP32 USB nestačí na napájanie pumpy!
 
 ---
 
-## 🔌 Zapojenie — Schéma pinov
+## 🔌 Zapojenie
+
+### ESP32 → Senzory
 
 ```
 ESP32 Pin    →    Komponent
-─────────────────────────────────────────────────
+──────────────────────────────────────────────────────
 GPIO  4      →    DHT11 DATA
-GPIO 34      →    Soil Moisture AO  (analóg ADC)
-GPIO 35      →    LDR Fotorezistor  (analóg ADC)
-GPIO 26      →    Relay IN → Vodná pumpa (active LOW)
-3.3V / GND   →    DHT11, LDR
-5V   / GND   →    Relay modul, Pumpa
+GPIO 21      →    LCD I2C SDA
+GPIO 22      →    LCD I2C SCL
+GPIO 34      →    Soil senzor PIN B + cez 10kΩ na GND
+GPIO 35      →    LDR + cez 10kΩ na GND
+GPIO 26      →    Relay IN
+3.3V         →    DHT11 VCC, Soil PIN A, LDR
+5V           →    Relay VCC, LCD VCC
+GND          →    Všetky GND dokopy
 ```
 
-> ⚠️ **Pozor:** Relé modul je **active LOW** — HIGH = pumpa vypnutá, LOW = pumpa zapnutá. Pumpu napájaj z 5V, nie z 3.3V pinu ESP32.
+### Soil senzor (2-pin, bez modulu)
+
+```
+Soil PIN A  →  3.3V
+Soil PIN B  →  GPIO 34  +  cez 10kΩ rezistor na GND
+```
+
+> Senzor nemá polaritu — piny sú zameniteľné.
+
+### LDR Fotorezistor (holý, bez modulu)
+
+```
+LDR nôžka 1  →  3.3V
+LDR nôžka 2  →  GPIO 35  +  cez 10kΩ rezistor na GND
+```
+
+> LDR tiež nemá polaritu.
+
+### Relay + Pumpa (zapojenie cez NC)
+
+```
+Relay svorkovnica:
+  COM  ←  Batéria + (červený)
+  NC   ←  Pumpa + (fialový)
+  NO   →  prázdny
+
+Batéria –  →  GND (spoločná s ESP32)
+Pumpa –    →  GND (spoločná s ESP32)
+```
+
+> ⚠️ **Prečo NC a nie NO?**
+> NC (Normally Closed) = pumpa ide keď relay je VYPNUTÝ.
+> Logika v kóde je obrátená: `pump=true → GPIO HIGH → relay aktívny → obvod otvorený → pumpa VYP`.
+> Výhoda: pumpa NEpôjde pri výpadku WiFi ani reštarte ESP32.
+
+### LCD 16x2 s I2C modulom
+
+```
+LCD I2C    →    ESP32
+─────────────────────
+VCC        →    5V
+GND        →    GND
+SDA        →    GPIO 21
+SCL        →    GPIO 22
+```
+
+> I2C adresa: **0x27** (alebo 0x3F — skontroluj pomocou I2C scannera)
+
+---
+
+## 📏 Kalibrácia soil senzora
+
+Resistívny senzor mení odpor podľa vlhkosti:
+- **Suchá pôda** = vysoký odpor = **vysoké ADC** hodnoty
+- **Mokrá pôda** = nízky odpor = **nízke ADC** hodnoty
+
+**Postup kalibrácie:**
+1. Zapoj senzor a otvor Serial Monitor (115200 baud)
+2. Daj senzor **na vzduch** (sucho) → zapíš `ADC=XXXX` → to je `SOIL_DRY`
+3. Daj senzor **do pohára s vodou** → zapíš `ADC=XXXX` → to je `SOIL_WET`
+4. Uprav v `firmware/greenhouse.ino`:
+
+```cpp
+const int SOIL_DRY = 4095;  // tvoja hodnota na vzduchu
+const int SOIL_WET =  800;  // tvoja hodnota vo vode
+```
 
 ---
 
@@ -123,14 +190,14 @@ git clone https://github.com/tvoj-username/iot-zavlazovanie.git
 cd iot-zavlazovanie
 ```
 
-### 2. Backend — Node.js
+### 2. Backend
 
 ```bash
 cd backend
 npm install
 ```
 
-### 3. Frontend — React
+### 3. Frontend (Vite + React)
 
 ```bash
 cd frontend
@@ -143,49 +210,36 @@ npm install recharts
 **Požadované knižnice** (inštaluj cez Library Manager):
 - `DHT sensor library` — od Adafruit
 - `ArduinoJson` — od Benoit Blanchon
+- `LiquidCrystal I2C` — od Frank de Brabander
 
 **Nastavenie Arduino IDE:**
-1. Pridaj ESP32 board: `File → Preferences → Additional Board URLs`
+1. Pridaj ESP32 board URL: `File → Preferences → Additional Board URLs`
    ```
    https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
    ```
-2. Vyber board: `Tools → Board → ESP32 Dev Module`
-3. Nastav port: `Tools → Port → COMx` (Windows) alebo `/dev/ttyUSB0` (Linux)
+2. `Tools → Board → ESP32 Dev Module`
+3. `Tools → Port → COMx`
 
 ---
 
 ## ▶️ Spustenie
 
-### Krok 1 — Uprav WiFi a IP adresu vo firmware
-
-Otvor `firmware/greenhouse.ino` a zmeň:
+### Krok 1 — Uprav `greenhouse.ino`
 
 ```cpp
-const char* WIFI_SSID  = "tvoja-wifi-siet";
+const char* WIFI_SSID  = "tvoja-wifi-siet";   // len 2.4GHz!
 const char* WIFI_PASS  = "tvoje-heslo";
-const char* SERVER_URL = "http://192.168.1.100:3001";  // IP tvojho PC
+const char* SERVER_URL = "http://192.168.0.XXX:3001";  // IP tvojho PC (ipconfig)
+
+const int SOIL_DRY = 4095;  // skalibrovať!
+const int SOIL_WET =  800;  // skalibrovať!
 ```
 
-> IP adresu backendu zistíš príkazom `ipconfig` (Windows) alebo `ip a` (Linux/Mac).
-
-### Krok 2 — Skalibrácia soil senzora
-
-Otvor `firmware/greenhouse.ino` a uprav:
-
-```cpp
-const int SOIL_DRY = 3200;  // ADC keď je senzor suchý (na vzduchu)
-const int SOIL_WET =  800;  // ADC keď je senzor vo vode
-```
-
-Skutočné hodnoty odčítaš zo **Serial Monitora** (115200 baud) — pozri riadok `Soil=xx% (ADC=xxxx)`.
-
-### Krok 3 — Spusti backend
+### Krok 2 — Spusti backend
 
 ```bash
 cd backend
 node server.js
-# alebo pri vývoji:
-npm run dev
 ```
 
 Výstup:
@@ -194,26 +248,26 @@ Backend bezi na http://localhost:3001
 WebSocket:       ws://localhost:3001
 ```
 
-### Krok 4 — Spusti frontend
+### Krok 3 — Spusti frontend
 
 ```bash
 cd frontend
-npm start
+npm run dev
 ```
 
-Dashboard sa otvorí na `http://localhost:3000`
+Dashboard sa otvorí na `http://localhost:5173`
 
-### Krok 5 — Nahraj firmware na ESP32
+### Krok 4 — Nahraj firmware
 
-Otvor `firmware/greenhouse.ino` v Arduino IDE a klikni **Upload** (→).
+Otvor `firmware/greenhouse.ino` v Arduino IDE → **Upload**.
 
-Po úspešnom nahraní uvidíš v Serial Monitore:
+Serial Monitor (115200 baud) ukáže:
 ```
-Smart Greenhouse v2.0 pripraveny!
-  Senzory : DHT11 | Soil AO | LDR
-  Aktuator: Vodna pumpa (Relay)
-WiFi OK — IP: 192.168.1.xxx
-[SENZORY] T=22.5 C  H=58.0%  Soil=65% (ADC=1820)  LDR=420
+Smart Greenhouse v2.0 pripravený!
+  Senzory : DHT11 | Soil AO | LDR | LCD
+  Aktuátor: Vodná pumpa (Relay NC)
+WiFi OK — IP: 192.168.0.116
+[SENZORY] T=26.5 C  H=58.0%  Soil=45% (ADC=2100)  LDR=3200
 [HTTP] POST /sensors -> 200
 [AKTUATOR] Pumpa=VYP
 ```
@@ -228,9 +282,7 @@ WiFi OK — IP: 192.168.1.xxx
 | ⏱️ **Ochrana** | Pumpa beží dlhšie ako max. čas (predvolene 10s) | Vypne pumpu |
 | ✅ **Vypnutie** | Vlhkosť pôdy ≥ prah | Vypne pumpu |
 
-Prah vlhkosti a maximálny čas behu sú **nastaviteľné** cez dashboard v záložke **Automatizácia**.
-
-V **MANUAL** režime môžeš pumpu zapínať a vypínať priamo z dashboardu.
+Nastavenia sú meniteľné cez dashboard → záložka **Automatizácia**.
 
 ---
 
@@ -242,41 +294,37 @@ Base URL: `http://localhost:3001`
 
 | Metóda | Endpoint | Popis |
 |--------|----------|-------|
-| `POST` | `/api/sensors` | ESP32 odosiela namerané hodnoty |
-| `GET` | `/api/actuators` | ESP32 sťahuje príkaz pre pumpu |
+| `POST` | `/api/sensors` | Odoslanie senzorových dát |
+| `GET` | `/api/actuators` | Stiahnutie príkazu pre pumpu |
 
-**POST /api/sensors — telo:**
+**POST /api/sensors:**
 ```json
 {
-  "temperature": 22.5,
+  "temperature": 26.5,
   "humidity": 58.0,
-  "soilMoisture": 32,
-  "light": 640
+  "soilMoisture": 45,
+  "light": 3200
 }
 ```
 
-**GET /api/actuators — odpoveď:**
+**GET /api/actuators:**
 ```json
-{
-  "pump": true
-}
+{ "pump": false }
 ```
 
 ### Frontend endpointy
 
 | Metóda | Endpoint | Popis |
 |--------|----------|-------|
-| `GET` | `/api/state` | Celkový stav systému |
+| `GET` | `/api/state` | Celkový stav |
 | `POST` | `/api/actuators` | Manuálne ovládanie pumpy |
-| `GET` | `/api/automation` | Čítanie nastavení automatizácie |
-| `POST` | `/api/automation` | Zápis nastavení automatizácie |
+| `GET/POST` | `/api/automation` | Nastavenia automatizácie |
 
 ### WebSocket — `ws://localhost:3001`
 
-**Správy zo servera:**
 ```json
 { "type": "sensors",   "data": { ... }, "ts": 1234567890 }
-{ "type": "actuators", "data": { "pump": true }, "ts": 1234567890 }
+{ "type": "actuators", "data": { "pump": false }, "ts": 1234567890 }
 { "type": "fullState", "data": { ... }, "ts": 1234567890 }
 ```
 
@@ -288,17 +336,18 @@ Base URL: `http://localhost:3001`
 iot-zavlazovanie/
 │
 ├── firmware/
-│   └── greenhouse.ino          # ESP32 C++ kód pre Arduino IDE
+│   └── greenhouse.ino          # ESP32 C++ kód — Arduino IDE
 │
 ├── backend/
-│   ├── server.js               # Node.js Express + WebSocket server
+│   ├── server.js               # Node.js Express + WebSocket
 │   └── package.json
 │
 ├── frontend/
 │   ├── public/
 │   │   └── index.html
 │   └── src/
-│       └── iot_greenhouse.jsx  # React dashboard
+│       ├── main.jsx            # React vstupný bod
+│       └── iot_greenhouse.jsx  # Dashboard (WebSocket live dáta)
 │
 └── README.md
 ```
@@ -309,12 +358,15 @@ iot-zavlazovanie/
 
 | Problém | Riešenie |
 |---------|----------|
-| ESP32 sa nepripája na WiFi | Skontroluj SSID/heslo, ESP32 podporuje **len 2.4GHz** |
+| ESP32 sa nepripája na WiFi | ESP32 podporuje **len 2.4GHz** — skontroluj frekvenciu siete |
 | `POST /sensors -> -1` | Backend nebeží alebo zlá IP v `SERVER_URL` |
 | DHT11 vracia `nan` | Skontroluj zapojenie GPIO 4, pridaj 10kΩ pull-up na DATA pin |
-| Soil senzor ukazuje 0% alebo 100% stále | Skalibrácia — uprav `SOIL_DRY` a `SOIL_WET` podľa tvojho senzora |
-| Pumpa nekliká | Skontroluj napájanie 5V, relay je active LOW (LOW = zapnutý) |
-| Dashboard sa neaktualizuje | Skontroluj či backend beží na porte 3001 |
+| Soil ukazuje 0% alebo 100% | Skalibrácia — uprav `SOIL_DRY` a `SOIL_WET` podľa Serial Monitora |
+| Pumpa nejde (NO) | Pumpa potrebuje **vlastný zdroj** — ESP32 USB nestačí |
+| Pumpa ide stále (NC) | Skontroluj `digitalWrite(PUMP_PIN, LOW)` v `setup()` |
+| LCD nezobrazuje nič | Skontroluj I2C adresu (0x27 alebo 0x3F), kontrast potenciometrom |
+| Dashboard OFFLINE | Skontroluj či backend beží na porte 3001 |
+| Frontend sa neotvorí | Spusti `npm run dev` v priečinku `frontend/` |
 
 ---
 
@@ -324,4 +376,4 @@ MIT License — voľne použiteľné pre školské aj osobné projekty.
 
 ---
 
-*Projekt vytvorený ako IoT školský projekt — ESP32 + Node.js + React*
+*IoT Zavlažovanie — ESP32 + Node.js + React + Vite · Školský projekt*
